@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASCII Broadcast Signal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    overflow: hidden;
+    background: linear-gradient(180deg, #1e0a3c 0%, #4a1a5e 25%, #7a2555 50%, #a83245 75%, #c9403a 100%);
+    font-family: 'Courier New', monospace;
+  }
+  #canvas {
+    white-space: pre;
+    font-size: 13px;
+    line-height: 15px;
+    letter-spacing: 1px;
+    cursor: crosshair;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div id="canvas"></div>
+<script>
+const W = 72;
+const H = 55;
+const cx = W / 2;
+const cy = H / 2;
+
+let mouseX = cx;
+let mouseY = cy;
+let time = 0;
+
+function seededRandom(seed) {
+  let s = seed;
+  return function() {
+    s = (s * 16807 + 0) % 2147483647;
+    return s / 2147483647;
+  };
+}
+
+const rng = seededRandom(77);
+
+// === CIRCULAR CORE: dense random block chars in a round bullseye center ===
+const coreChars = ['█', '▓', '▒', '░', '■', '▪', '◆', '#', '▐', '▌', '·', '•', ':', '*'];
+
+// Core is a circle of radius ~4 (adjusted for char aspect ratio)
+const coreRadius = 4;
+
+// Pre-generate all particles
+const particles = [];
+
+for (let y = 0; y < H; y++) {
+  for (let x = 0; x < W; x++) {
+    const dx = (x - cx) * 0.5;
+    const dy = y - cy;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d > 27) continue;
+
+    const isCore = d <= coreRadius;
+
+    if (isCore) {
+      // Dense fill inside the circular core
+      // Higher density toward the very center, tapering at edges
+      const coreDensity = 0.65 - (d / coreRadius) * 0.2;
+      if (rng() < coreDensity) {
+        particles.push({
+          x, y, d, angle: Math.atan2(dy, dx),
+          seed: rng(), baseChar: rng(),
+          phaseOff: rng() * Math.PI * 2,
+          isCore: true,
+        });
+      }
+    } else {
+      let density;
+      if (d < 7) density = 0.16;
+      else if (d < 12) density = 0.12;
+      else if (d < 17) density = 0.09;
+      else if (d < 22) density = 0.07;
+      else density = 0.055;
+
+      if (rng() < density) {
+        particles.push({
+          x, y, d, angle: Math.atan2(dy, dx),
+          seed: rng(), baseChar: rng(),
+          phaseOff: rng() * Math.PI * 2,
+          isCore: false,
+        });
+      }
+    }
+  }
+}
+
+// Characters ordered from inner rings to outer edges
+const charSets = {
+  inner: ['—', '·', '•', '═', '|', '·', ':'],
+  mid:   ['=', '—', '·', '•', '+', ':', '·'],
+  outer: ['≈', '~', '·', '•', '—', '.'],
+  edge:  ['~', '·', '.', '˙', '·'],
+};
+
+function getCharSet(d) {
+  if (d < 9) return charSets.inner;
+  if (d < 15) return charSets.mid;
+  if (d < 22) return charSets.outer;
+  return charSets.edge;
+}
+
+function dist(x1, y1, x2, y2) {
+  const dx = (x1 - x2) * 0.5;
+  const dy = y1 - y2;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function render() {
+  time += 0.012; // slowed down from 0.025
+
+  const offX = (mouseX - cx) * 0.025; // reduced from 0.06
+  const offY = (mouseY - cy) * 0.025;
+
+  const grid = [];
+  for (let y = 0; y < H; y++) {
+    grid[y] = new Array(W).fill(null);
+  }
+
+  // === Draw all particles (core + rings) in one pass ===
+  for (const p of particles) {
+    const pFactor = Math.max(0.01, 1 - p.d / 30) * 0.05; // reduced from 0.12
+    const sx = Math.round(p.x + offX * pFactor * (30 - p.d));
+    const sy = Math.round(p.y + offY * pFactor * (30 - p.d));
+    if (sx < 0 || sx >= W || sy < 0 || sy >= H) continue;
+
+    let ch, r, g, b, alpha;
+
+    if (p.isCore) {
+      // Dense random chars inside the antenna silhouette
+      const charShift = Math.floor(Math.sin(time * 1.2 + p.seed * 20) * 2 + 2);
+      ch = coreChars[Math.abs(Math.floor(p.seed * coreChars.length + charShift)) % coreChars.length];
+
+      const pulse = 0.82 + Math.sin(time * 1.5 + p.seed * 10) * 0.18;
+      r = Math.round(238 * pulse);
+      g = Math.round(234 * pulse);
+      b = Math.round(248 * pulse);
+      alpha = 0.85 + Math.sin(time * 0.8 + p.seed * 15) * 0.1;
+
+      // Mouse glow on core
+      const mDist = dist(sx, sy, mouseX, mouseY);
+      if (mDist < 6) {
+        const glow = 1 - mDist / 6;
+        r = Math.min(255, r + Math.round(glow * 40));
+        g = Math.min(255, g + Math.round(glow * 40));
+        b = Math.min(255, b + Math.round(glow * 50));
+      }
+    } else {
+      // Ring particles — broadcast wave (slowed speeds)
+      const wave1 = Math.sin(p.d * 0.3 - time * 1.8 + p.phaseOff * 0.2);
+      const wave2 = Math.sin(p.d * 0.2 - time * 1.3);
+      const wave3 = Math.sin(p.d * 0.4 - time * 2.2 + 1.0);
+      const waveCombined = (wave1 * 0.5 + wave2 * 0.3 + wave3 * 0.2);
+
+      const waveIntensity = Math.max(0, waveCombined);
+      const baseAlpha = 0.15 + (1 - p.d / 28) * 0.2;
+      alpha = baseAlpha + waveIntensity * 0.6;
+
+      if (waveCombined < -0.3 && p.d > 5) {
+        alpha *= 0.3;
+      }
+
+      const chars = getCharSet(p.d);
+      const charShift = Math.floor(waveIntensity * 3 + p.baseChar * chars.length);
+      ch = chars[Math.abs(charShift) % chars.length];
+
+      const yNorm = p.y / H;
+      const warmth = waveIntensity * 0.3;
+      r = Math.round(180 + waveIntensity * 70 + warmth * 20);
+      g = Math.round(175 + waveIntensity * 60);
+      b = Math.round(210 + waveIntensity * 40);
+      r = Math.round(r + yNorm * 15);
+      g = Math.round(g - yNorm * 10);
+      b = Math.round(b - yNorm * 20);
+
+      const mDist = dist(sx, sy, mouseX, mouseY);
+      if (mDist < 8) {
+        const glow = (1 - mDist / 8);
+        r = Math.min(255, r + Math.round(glow * 50));
+        g = Math.min(255, g + Math.round(glow * 45));
+        b = Math.min(255, b + Math.round(glow * 60));
+        alpha = Math.min(1, alpha + glow * 0.25);
+      }
+
+      const mouseRipple = Math.sin(mDist * 0.7 - time * 2.5); // slowed from time*5
+      if (mDist < 10 && mDist > 1.5 && mouseRipple > 0.7) {
+        r = Math.min(255, r + 25);
+        g = Math.min(255, g + 22);
+        b = Math.min(255, b + 35);
+        alpha = Math.min(1, alpha + 0.15);
+      }
+    }
+
+    r = Math.max(0, Math.min(255, r));
+    g = Math.max(0, Math.min(255, g));
+    b = Math.max(0, Math.min(255, b));
+    alpha = Math.max(0, Math.min(1, alpha));
+
+    grid[sy][sx] = { ch, r, g, b, alpha };
+  }
+
+  // Cursor marker
+  const mx = Math.round(mouseX);
+  const my = Math.round(mouseY);
+  if (mx >= 0 && mx < W && my >= 0 && my < H) {
+    grid[my][mx] = { ch: '✦', r: 255, g: 255, b: 255, alpha: 0.85 };
+  }
+
+  // Render
+  let html = '';
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const c = grid[y][x];
+      if (c) {
+        html += `<span style="color:rgba(${c.r},${c.g},${c.b},${c.alpha.toFixed(2)})">${c.ch}</span>`;
+      } else {
+        html += ' ';
+      }
+    }
+    html += '\n';
+  }
+
+  document.getElementById('canvas').innerHTML = html;
+  requestAnimationFrame(render);
+}
+
+const el = document.getElementById('canvas');
+document.addEventListener('mousemove', (e) => {
+  const rect = el.getBoundingClientRect();
+  if (!rect.width) return;
+  mouseX = (e.clientX - rect.left) / (rect.width / W);
+  mouseY = (e.clientY - rect.top) / (rect.height / H);
+});
+
+document.addEventListener('mouseleave', () => {
+  mouseX = cx; mouseY = cy;
+});
+
+render();
+</script>
+</body>
+</html>
