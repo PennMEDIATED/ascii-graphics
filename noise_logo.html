@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Signal from noise mark</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&amp;family=JetBrains+Mono:wght@500;700&amp;family=Montserrat:wght@600;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width:520px;height:560px;box-sizing:border-box;padding:44px 40px 40px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;background:{{bg}}">
+<div role="img" aria-label="The word MEDIATED resolving out of a field of flickering characters, then dissolving back" style="position:relative;width:360px;height:360px;overflow:hidden;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;line-height:17px;white-space:pre">
+<div style="position:absolute;left:3px;top:2px;color:{{violet}};opacity:{{bgOp}};font-weight:500">
+<sc-for list="{{bgRows}}" as="row" hint-placeholder-count="21"><div>{{row.s}}</div></sc-for>
+</div>
+<div style="position:absolute;left:3px;top:2px;color:{{coral}};opacity:{{fgOp}};font-weight:500">
+<sc-for list="{{fgRows}}" as="row" hint-placeholder-count="21"><div>{{row.s}}</div></sc-for>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"speed":{"editor":"range","default":1,"min":0.25,"max":3,"step":0.05,"unit":"×","section":"Motion"},"dark":{"editor":"boolean","default":false,"section":"Theme"},"$preview":{"width":520,"height":560}}'>
+class Component extends DCLogic {
+  componentDidMount() {
+    this._t = 0; this._last = null; this._acc = 0;
+    if (typeof window === 'undefined' || !window.requestAnimationFrame) return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { this.setState({ t: 3.5 }); return; }
+    const loop = (ts) => {
+      if (this._last == null) this._last = ts;
+      const dt = Math.min(64, ts - this._last);
+      this._last = ts;
+      this._t += (dt / 1000) * Math.max(0.25, Number(this.props.speed ?? 1));
+      this._acc += dt;
+      if (this._acc >= 50) { this._acc = 0; this.setState({ t: this._t }); }
+      this._raf = window.requestAnimationFrame(loop);
+    };
+    this._raf = window.requestAnimationFrame(loop);
+  }
+  componentWillUnmount() {
+    if (this._raf && typeof window !== 'undefined') window.cancelAnimationFrame(this._raf);
+  }
+  mask() {
+    if (this._mask) return this._mask;
+    const F = {
+      M: ['10001','11011','10101','10101','10001','10001','10001'],
+      E: ['11111','10000','10000','11110','10000','10000','11111'],
+      D: ['11110','10001','10001','10001','10001','10001','11110'],
+      I: ['11111','00100','00100','00100','00100','00100','11111'],
+      A: ['01110','10001','10001','11111','10001','10001','10001'],
+      T: ['11111','00100','00100','00100','00100','00100','00100']
+    };
+    const COLS = 49, ROWS = 21, R0 = 7, word = 'MEDIATED';
+    const m = [];
+    for (let r = 0; r < ROWS; r++) { m.push(new Array(COLS).fill(false)); }
+    for (let k = 0; k < word.length; k++) {
+      const g = F[word[k]], c0 = 1 + k * 6;
+      for (let r = 0; r < 7; r++) for (let c = 0; c < 5; c++) if (g[r][c] === '1') m[R0 + r][c0 + c] = true;
+    }
+    this._mask = m;
+    return m;
+  }
+  renderVals() {
+    const dark = !!(this.props.dark ?? false);
+    const t = (this.state && this.state.t) || 0;
+    const m = this.mask();
+    const COLS = 49, ROWS = 21, CYC = 10;
+    const p = (t % CYC) / CYC;
+    const G = '··.:+-~=*';
+    const h = (a, b) => { const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return v - Math.floor(v); };
+    const ss = (x) => { const v = Math.max(0, Math.min(1, x)); return v * v * (3 - 2 * v); };
+    const bgRows = [], fgRows = [];
+    for (let r = 0; r < ROWS; r++) {
+      let bs = '', fs = '';
+      for (let c = 0; c < COLS; c++) {
+        const id = r * COLS + c;
+        const rnd = h(id, 1);
+        const slow = Math.floor(t * 1.1 + h(id, 3) * 7);
+        const g = G[Math.floor(h(id, slow) * G.length)];
+        const on = h(id + 7, slow) < 0.3;
+        let resolved = false, fresh = false;
+        if (m[r][c]) {
+          const lock = 0.08 + (c / COLS) * 0.36 + rnd * 0.04;
+          const unlock = 0.74 + (c / COLS) * 0.16 + rnd * 0.03;
+          resolved = p >= lock && p < unlock;
+          fresh = resolved && (p - lock < 0.012 || unlock - p < 0.012);
+        }
+        if (resolved) {
+          bs += ' ';
+          fs += fresh ? '▒' : '█';
+        } else {
+          bs += on ? g : ' ';
+          fs += ' ';
+        }
+      }
+      bgRows.push({ s: bs });
+      fgRows.push({ s: fs });
+    }
+    const focus = ss((p - 0.08) / 0.4) * (1 - ss((p - 0.74) / 0.2));
+    return {
+      bgRows, fgRows,
+      bgOp: (0.42 - 0.24 * focus).toFixed(2),
+      fgOp: (0.55 + 0.4 * focus).toFixed(2),
+      coral: '#F04A2B',
+      violet: dark ? '#8C78FF' : '#5534E0',
+      bg: dark ? '#14121C' : '#FFFFFF',
+      ink: dark ? '#F6F3EE' : '#1B1830',
+      muted: dark ? '#B9B4CC' : '#5E5A72'
+    };
+  }
+}
+</script>
+</body>
+</html>
