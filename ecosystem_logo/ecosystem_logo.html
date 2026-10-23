@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ecosystem mark</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&amp;family=Montserrat:wght@600;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width:520px;height:560px;box-sizing:border-box;padding:44px 40px 40px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;background:{{bg}}">
+<div role="img" aria-label="A drifting network of nodes whose links form and dissolve, anchored by M, T and D" style="position:relative;width:360px;height:360px;overflow:hidden">
+<sc-for list="{{edges}}" as="e" hint-placeholder-count="12">
+<div style="position:absolute;left:{{e.x}}px;top:{{e.y}}px;width:{{e.len}}px;height:{{e.w}}px;margin-top:{{e.mt}}px;transform-origin:0 50%;transform:rotate({{e.a}}deg);background:{{e.col}};opacity:{{e.op}};border-radius:9px"></div>
+</sc-for>
+<sc-for list="{{nodes}}" as="n" hint-placeholder-count="14">
+<div style="position:absolute;left:{{n.left}}px;top:{{n.top}}px;width:{{n.d}}px;height:{{n.d}}px;border-radius:50%;background:{{n.col}};display:flex;align-items:center;justify-content:center;color:#FFFFFF;font-family:'Montserrat',sans-serif;font-weight:700;font-size:18px;line-height:1">{{n.label}}</div>
+</sc-for>
+</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"speed":{"editor":"range","default":1,"min":0.25,"max":3,"step":0.05,"unit":"×","section":"Motion"},"dark":{"editor":"boolean","default":false,"section":"Theme"},"$preview":{"width":520,"height":560}}'>
+class Component extends DCLogic {
+  componentDidMount() {
+    this._t = 0;
+    this._last = null;
+    this._acc = 0;
+    if (typeof window === 'undefined' || !window.requestAnimationFrame) return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const loop = (ts) => {
+      if (this._last == null) this._last = ts;
+      const dt = Math.min(64, ts - this._last);
+      this._last = ts;
+      const sp = Math.max(0.25, Number(this.props.speed ?? 1));
+      this._t += (dt / 1000) * sp;
+      this._acc += dt;
+      if (this._acc >= 33) {
+        this._acc = 0;
+        this.setState({ t: this._t });
+      }
+      this._raf = window.requestAnimationFrame(loop);
+    };
+    this._raf = window.requestAnimationFrame(loop);
+  }
+  componentWillUnmount() {
+    if (this._raf && typeof window !== 'undefined') window.cancelAnimationFrame(this._raf);
+  }
+  renderVals() {
+    const dark = !!(this.props.dark ?? false);
+    const coral = '#F04A2B';
+    const violet = dark ? '#8C78FF' : '#5534E0';
+    const t = (this.state && this.state.t) || 0;
+    const S = 0.9;
+    const anchors = [
+      { x: 110, y: 130, r: 22, label: 'M', c: 'c' },
+      { x: 292, y: 118, r: 22, label: 'T', c: 'c' },
+      { x: 200, y: 288, r: 22, label: 'D', c: 'c' },
+      { x: 56, y: 56, r: 7, c: 'v' },
+      { x: 196, y: 46, r: 9, c: 'c' },
+      { x: 348, y: 52, r: 6, c: 'v' },
+      { x: 356, y: 206, r: 9, c: 'c' },
+      { x: 330, y: 326, r: 7, c: 'v' },
+      { x: 206, y: 368, r: 6, c: 'v' },
+      { x: 76, y: 336, r: 9, c: 'c' },
+      { x: 44, y: 212, r: 6, c: 'v' },
+      { x: 200, y: 180, r: 8, c: 'v' },
+      { x: 132, y: 236, r: 6, c: 'c' },
+      { x: 270, y: 226, r: 7, c: 'c' }
+    ];
+    const pts = anchors.map((a, i) => {
+      const amp = a.label ? 16 : 28;
+      return {
+        x: a.x + amp * Math.sin(t * (0.5 + 0.07 * i) + i * 1.7),
+        y: a.y + amp * Math.cos(t * (0.43 + 0.05 * i) + i * 2.3),
+        r: a.r * (1 + 0.08 * Math.sin(t * 1.6 + i)),
+        label: a.label || '',
+        col: a.c === 'c' ? coral : violet
+      };
+    });
+    const TH = 135;
+    const edges = [];
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        const p = pts[i], q = pts[j];
+        const dx = q.x - p.x, dy = q.y - p.y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        const triad = p.label && q.label;
+        if (!triad && d >= TH) continue;
+        const f = triad ? 1 : 1 - d / TH;
+        const w = triad ? 4 : 1 + 2.5 * f;
+        edges.push({
+          x: (p.x * S).toFixed(1),
+          y: (p.y * S).toFixed(1),
+          len: (d * S).toFixed(1),
+          w: w.toFixed(1),
+          mt: (-w / 2).toFixed(1),
+          a: (Math.atan2(dy, dx) * 180 / Math.PI).toFixed(2),
+          col: triad ? coral : violet,
+          op: triad ? '0.9' : (0.12 + 0.7 * f).toFixed(2)
+        });
+      }
+    }
+    const nodes = pts.map((p) => ({
+      left: ((p.x - p.r) * S).toFixed(1),
+      top: ((p.y - p.r) * S).toFixed(1),
+      d: (p.r * 2 * S).toFixed(1),
+      col: p.col,
+      label: p.label
+    }));
+    return {
+      edges,
+      nodes,
+      bg: dark ? '#14121C' : '#FFFFFF',
+      ink: dark ? '#F6F3EE' : '#1B1830',
+      muted: dark ? '#B9B4CC' : '#5E5A72'
+    };
+  }
+}
+</script>
+</body>
+</html>
