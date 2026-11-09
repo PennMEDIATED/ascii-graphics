@@ -1,9 +1,9 @@
 /**
- * MEDIATED conversation icon — scroll-driven version
+ * MEDIATED conversation icon — scroll-driven version (one message at a time)
  * --------------------------------------------------
  * Geometry is taken 1:1 from Figma node 533:218 ("conversation icon").
- * As the user scrolls, the current pair of bubbles rises and fades out
- * completely, then two new bubbles pop in, in the same spot, with new icons.
+ * Two messages sit on screen. Each scroll step the older one lifts away and fades,
+ * the newer one moves up into its place, and a new message pops in below it.
  *
  * Usage:
  *   load this file as a module:  script type="module" src="conversation-scroll.js"
@@ -11,11 +11,11 @@
  *
  * Attributes (all optional):
  *   themes       comma-separated theme ids, in order (default: all THEMES)
- *   step-height  scroll distance per new pair, any CSS length (default: 80vh)
+ *   step-height  scroll distance per new message, any CSS length (default: 40vh)
  *   size         rendered width of the icon (default: 180px)
  *
  * Events:
- *   "convo-step"  detail: { index, theme }  — fires when the active pair changes
+ *   "convo-step"  detail: { index, icon, theme }  — fires when a new message appears
  *
  * Styling hooks: --convo-violet, --convo-coral, --convo-bg
  */
@@ -256,11 +256,14 @@ export function staticSVG(theme) {
 }
 
 /* ---- Scroll-driven web component ----------------------------------------
- * Scroll position picks which pair should be showing; each change then plays
- * as a fixed-length, time-based transition (old pair lifts and fades out, new
- * bubbles pop in from their tails). Because the motion runs on time rather
- * than being scrubbed by scroll, it stays smooth with any wheel/trackpad, and
- * the icon always comes to rest fully drawn — never half-faded.
+ * The themes are unrolled into a stream of messages (each theme contributes a
+ * top icon then a bottom icon). Two messages are on screen at rest. Each scroll
+ * step plays one fixed-length, time-based transition, one bubble at a time:
+ *   1. the older (top) message lifts away and fades out,
+ *   2. the newer (bottom) message moves up into the top slot,
+ *   3. a brand-new message pops in at the bottom slot.
+ * Because the motion runs on time rather than being scrubbed by scroll, it
+ * stays smooth with any wheel/trackpad and always comes to rest fully drawn.
  * ----------------------------------------------------------------------- */
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
 const phase = (t, [a, b]) => clamp((t - a) / (b - a));
@@ -270,57 +273,89 @@ const easeOutQuart = (t) => 1 - Math.pow(1 - t, 4);
 // Gentle overshoot so the pop feels springy without wobbling.
 const easeOutBack = (t, s = 1.15) => 1 + (s + 1) * Math.pow(t - 1, 3) + s * Math.pow(t - 1, 2);
 
-const DURATION = 950;            // ms per transition
-const DURATION_REDUCED = 300;    // ms crossfade when reduced motion is on
-const EXIT = [0, 0.4];           // old pair: lift + fade out
-const ENTER_TOP = [0.3, 0.75];   // new top bubble pops
-const ENTER_BOTTOM = [0.48, 0.95]; // new bottom bubble pops, slightly after
-const EXIT_LIFT = 14;            // icon units the old pair rises while leaving
-const ENTER_RISE = 6;            // icon units a new bubble rises into place
-const ENTER_SCALE = 0.55;        // starting scale of a popping bubble
+export const DURATION = 1100;           // ms per step
+export const DURATION_REDUCED = 300;    // ms crossfade when reduced motion is on
+const EXIT = [0, 0.45];                 // old top message: lift + fade out
+const MOVE = [0.1, 0.7];                // bottom message travels up to the top slot
+const ENTER = [0.45, 0.95];             // new message pops in at the bottom slot
+const EXIT_LIFT = 14;                   // icon units the leaving message rises
+const ENTER_RISE = 6;                   // icon units a new bubble rises into place
+const ENTER_SCALE = 0.55;               // starting scale of a popping bubble
+const MOVE_DX = BUBBLE_TOP.center[0] - BUBBLE_BOTTOM.center[0];
+const MOVE_DY = BUBBLE_TOP.center[1] - BUBBLE_BOTTOM.center[1];
+
+/** Unroll theme pairs into the message stream: [{ icon, theme }, …]. */
+export const messagesOf = (themes) => themes.flatMap((t) => [{ icon: t.top, theme: t }, { icon: t.bottom, theme: t }]);
+
+/**
+ * Pose of every moving part at time t ∈ [0,1] of one step (pure, shared with
+ * the GIF exporter). `out` is the leaving top message, `mid` the bottom message
+ * travelling up (it cross-fades from its bottom-slot look to its top-slot look
+ * as it goes), `inn` the new bottom message.
+ */
+export function stepPose(t) {
+  const e = easeInOutCubic(phase(t, EXIT));
+  const m = easeInOutCubic(phase(t, MOVE));
+  const p = phase(t, ENTER);
+  const fade = easeInOutCubic(clamp((m - 0.2) / 0.6));
+  return {
+    out: { dy: -EXIT_LIFT * e, opacity: 1 - e },
+    mid: {
+      bottom: { dx: MOVE_DX * m, dy: MOVE_DY * m, opacity: 1 - fade },
+      top: { dx: -MOVE_DX * (1 - m), dy: -MOVE_DY * (1 - m), opacity: fade },
+    },
+    inn: {
+      scale: ENTER_SCALE + (1 - ENTER_SCALE) * easeOutBack(p),
+      rise: ENTER_RISE * (1 - easeOutQuart(p)),
+      opacity: easeOutCubic(clamp(p / 0.6)),
+    },
+  };
+}
 
 if (typeof window !== 'undefined' && !customElements.get('mediated-conversation')) {
   class MediatedConversation extends HTMLElement {
     connectedCallback() {
       const ids = (this.getAttribute('themes') || '').split(',').map((s) => s.trim()).filter(Boolean);
       this.themes = ids.length ? ids.map((id) => THEMES.find((t) => t.id === id)).filter(Boolean) : THEMES;
-      const n = this.themes.length;
-      const stepH = this.getAttribute('step-height') || '80vh';
+      this.msgs = messagesOf(this.themes);
+      this.steps = this.msgs.length - 2;           // step s shows messages s (top) and s+1 (bottom)
+      const stepH = this.getAttribute('step-height') || '40vh';
       const size = this.getAttribute('size') || '180px';
       this.reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
       this.attachShadow({ mode: 'open' }).innerHTML = `
         <style>
-          :host { display:block; position:relative; height: calc(${stepH} * ${n - 1} + 100vh); }
+          :host { display:block; position:relative; height: calc(${stepH} * ${this.steps} + 100vh); }
           .stage { position:sticky; top:0; height:100vh; display:flex; flex-direction:column;
                    align-items:center; justify-content:center; gap:24px; }
           svg { width:${size}; height:auto; overflow:visible; display:block; }
-          [data-side] { will-change: transform, opacity; }
+          [data-msg], [data-v] { will-change: transform, opacity; }
         </style>
         <div class="stage">
           <svg viewBox="0 0 99 118" role="img"
                aria-label="Conversation icon cycling through Penn MEDIATED research themes">
-            <g class="pairs"></g>
+            <g class="msgs"></g>
           </svg>
           <slot></slot>
         </div>`;
 
-      const root = this.shadowRoot.querySelector('.pairs');
+      const root = this.shadowRoot.querySelector('.msgs');
       const css = getComputedStyle(this);
       const violet = css.getPropertyValue('--convo-violet').trim() || VIOLET;
       const coral = css.getPropertyValue('--convo-coral').trim() || CORAL;
-      // Every pair occupies the same 99×118 frame; only one is shown at rest.
-      root.innerHTML = this.themes
-        .map((t, j) =>
-          `<g data-pair="${j}" style="display:none">` +
-          `<g data-side="top">${bubbleMarkup('top', t.top, { bubbleColor: violet, iconColor: coral })}</g>` +
-          `<g data-side="bottom">${bubbleMarkup('bottom', t.bottom, { bubbleColor: coral, iconColor: violet })}</g>` +
+      // Each message carries both of its looks: the top slot (violet bubble,
+      // coral icon) and the bottom slot (coral bubble, violet icon).
+      root.innerHTML = this.msgs
+        .map((m) =>
+          `<g data-msg style="display:none">` +
+          `<g data-v="top">${bubbleMarkup('top', m.icon, { bubbleColor: violet, iconColor: coral })}</g>` +
+          `<g data-v="bottom">${bubbleMarkup('bottom', m.icon, { bubbleColor: coral, iconColor: violet })}</g>` +
           `</g>`)
         .join('');
-      this.pairs = [...root.querySelectorAll('[data-pair]')].map((g) => ({
+      this.nodes = [...root.querySelectorAll('[data-msg]')].map((g) => ({
         g,
-        top: g.querySelector('[data-side="top"]'),
-        bottom: g.querySelector('[data-side="bottom"]'),
+        top: g.querySelector('[data-v="top"]'),
+        bottom: g.querySelector('[data-v="bottom"]'),
       }));
 
       this.shown = this.targetIndex();
@@ -330,7 +365,7 @@ if (typeof window !== 'undefined' && !customElements.get('mediated-conversation'
       this.onScroll = () => this.update();
       addEventListener('scroll', this.onScroll, { passive: true });
       addEventListener('resize', this.onScroll);
-      // Announce the starting pair once page scripts have attached listeners.
+      // Announce the starting step once page scripts have attached listeners.
       setTimeout(() => this.announce(this.shown));
     }
 
@@ -340,25 +375,28 @@ if (typeof window !== 'undefined' && !customElements.get('mediated-conversation'
       cancelAnimationFrame(this.raf);
     }
 
-    /** Which pair the scroll position asks for (switches at the midpoint of each step). */
+    /** Which step the scroll position asks for (switches at the midpoint of each step). */
     targetIndex() {
       const r = this.getBoundingClientRect();
       const travel = r.height - innerHeight;
-      const p = travel > 0 ? clamp(-r.top / travel) * (this.themes.length - 1) : 0;
-      return Math.min(this.themes.length - 1, Math.round(p));
+      const p = travel > 0 ? clamp(-r.top / travel) * this.steps : 0;
+      return Math.min(this.steps, Math.round(p));
     }
 
     update() {
       if (this.anim) return;                      // finishing transition will re-check
-      const to = this.targetIndex();
-      if (to === this.shown) return;
-      this.anim = { from: this.shown, to, start: performance.now() };
-      this.announce(to);
+      const target = this.targetIndex();
+      if (target === this.shown) return;
+      // Move one message at a time, scrolling back plays a step in reverse.
+      const dir = Math.sign(target - this.shown);
+      this.anim = { from: this.shown, to: this.shown + dir, start: performance.now() };
+      this.announce(this.anim.to);
       const tick = (now) => {
-        const t = clamp((now - this.anim.start) / (this.reduced ? DURATION_REDUCED : DURATION));
-        this.draw(this.anim.from, this.anim.to, t);
+        const { from, to, start } = this.anim;
+        const t = clamp((now - start) / (this.reduced ? DURATION_REDUCED : DURATION));
+        this.draw(Math.min(from, to), dir > 0 ? t : 1 - t);
         if (t < 1) { this.raf = requestAnimationFrame(tick); return; }
-        this.shown = this.anim.to;
+        this.shown = to;
         this.anim = null;
         this.showOnly(this.shown);
         this.update();                            // catch up if the user kept scrolling
@@ -366,50 +404,53 @@ if (typeof window !== 'undefined' && !customElements.get('mediated-conversation'
       this.raf = requestAnimationFrame(tick);
     }
 
-    announce(index) {
-      this.dispatchEvent(new CustomEvent('convo-step', { detail: { index, theme: this.themes[index] } }));
+    announce(step) {
+      const m = this.msgs[step + 1];
+      this.dispatchEvent(new CustomEvent('convo-step', { detail: { index: step, icon: m.icon, theme: m.theme } }));
     }
 
-    showOnly(index) {
-      this.pairs.forEach(({ g, top, bottom }, j) => {
-        g.style.display = j === index ? '' : 'none';
+    /** Apply opacity/transform to one element. */
+    put(el, opacity, transform) {
+      el.setAttribute('opacity', opacity.toFixed(3));
+      if (transform) el.setAttribute('transform', transform); else el.removeAttribute('transform');
+    }
+
+    /** Hide every message, then show messages `s` (top) and `s+1` (bottom) at rest. */
+    showOnly(s) {
+      this.nodes.forEach(({ g, top, bottom }, j) => {
+        g.style.display = j === s || j === s + 1 ? '' : 'none';
         g.removeAttribute('transform');
-        for (const el of [top, bottom]) { el.removeAttribute('transform'); el.setAttribute('opacity', '1'); }
+        this.put(top, j === s ? 1 : 0);
+        this.put(bottom, j === s + 1 ? 1 : 0);
       });
     }
 
-    /** One frame of the transition from pair `from` to pair `to` at time t ∈ [0,1]. */
-    draw(from, to, t) {
-      const out = this.pairs[from];
-      const inn = this.pairs[to];
-      out.g.style.display = '';
-      inn.g.style.display = '';
+    /** One frame of step `s` at time t ∈ [0,1]. */
+    draw(s, t) {
+      const [out, mid, inn] = [this.nodes[s], this.nodes[s + 1], this.nodes[s + 2]];
+      this.nodes.forEach(({ g }) => { g.style.display = 'none'; });
+      for (const n of [out, mid, inn]) { n.g.style.display = ''; n.g.removeAttribute('transform'); }
 
       if (this.reduced) {                         // plain crossfade, no movement
         const k = easeInOutCubic(t);
-        for (const el of [out.top, out.bottom]) el.setAttribute('opacity', (1 - k).toFixed(3));
-        for (const el of [inn.top, inn.bottom]) { el.removeAttribute('transform'); el.setAttribute('opacity', k.toFixed(3)); }
+        this.put(out.top, 1 - k); this.put(out.bottom, 0);
+        this.put(mid.top, 0); this.put(mid.bottom, 1);
+        this.put(inn.top, 0); this.put(inn.bottom, k);
         return;
       }
 
-      // Exit: the whole old pair lifts and fades together.
-      const e = easeInOutCubic(phase(t, EXIT));
-      out.g.setAttribute('transform', `translate(0 ${(-EXIT_LIFT * e).toFixed(3)})`);
-      for (const el of [out.top, out.bottom]) { el.removeAttribute('transform'); el.setAttribute('opacity', (1 - e).toFixed(3)); }
-
-      // Enter: each new bubble scales up from its tail tip while rising into place.
-      inn.g.removeAttribute('transform');
-      this.pop(inn.top, BUBBLE_TOP.origin, phase(t, ENTER_TOP));
-      this.pop(inn.bottom, BUBBLE_BOTTOM.origin, phase(t, ENTER_BOTTOM));
-    }
-
-    pop(el, [ox, oy], t) {
-      const scale = ENTER_SCALE + (1 - ENTER_SCALE) * easeOutBack(t);
-      const rise = ENTER_RISE * (1 - easeOutQuart(t));
-      const opacity = easeOutCubic(clamp(t / 0.6));
-      el.setAttribute('opacity', opacity.toFixed(3));
-      el.setAttribute('transform',
-        `translate(0 ${rise.toFixed(3)}) translate(${ox} ${oy}) scale(${scale.toFixed(4)}) translate(${-ox} ${-oy})`);
+      const p = stepPose(t);
+      // 1. leaving message lifts and fades
+      this.put(out.top, p.out.opacity, `translate(0 ${p.out.dy.toFixed(3)})`);
+      this.put(out.bottom, 0);
+      // 2. middle message travels up, swapping its bottom look for its top look
+      this.put(mid.bottom, p.mid.bottom.opacity, `translate(${p.mid.bottom.dx.toFixed(3)} ${p.mid.bottom.dy.toFixed(3)})`);
+      this.put(mid.top, p.mid.top.opacity, `translate(${p.mid.top.dx.toFixed(3)} ${p.mid.top.dy.toFixed(3)})`);
+      // 3. new message pops in from its tail tip at the bottom slot
+      const [ox, oy] = BUBBLE_BOTTOM.origin;
+      this.put(inn.top, 0);
+      this.put(inn.bottom, p.inn.opacity,
+        `translate(0 ${p.inn.rise.toFixed(3)}) translate(${ox} ${oy}) scale(${p.inn.scale.toFixed(4)}) translate(${-ox} ${-oy})`);
     }
   }
   customElements.define('mediated-conversation', MediatedConversation);
