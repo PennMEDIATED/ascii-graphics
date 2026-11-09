@@ -27,11 +27,15 @@
  *   themes       comma-separated theme ids, in order (default: all THEMES)
  *   step-height  scroll distance per new message, any CSS length (default: 40vh)
  *   size         rendered width of the icon (default: 180px)
+ *   color        one colour for every bubble and icon, e.g. color="#fff" for a white
+ *                version that sits on any background (default: violet / coral)
  *
  * Events:
  *   "convo-step"  detail: { index, icon, theme }  — fires when a new message appears
  *
- * Styling hooks: --convo-violet, --convo-coral, --convo-bg
+ * Styling hooks: --convo-violet, --convo-coral
+ * Where bubbles overlap mid-transition the front one knocks out the one behind it,
+ * so the icon stays clean over gradients and images.
  */
 
 export const VIOLET = '#5533EE';
@@ -348,6 +352,14 @@ if (typeof window !== 'undefined' && !customElements.get('mediated-conversation'
         <div class="stage">
           <svg viewBox="0 0 99 118" role="img"
                aria-label="Conversation icon cycling through Penn MEDIATED research themes">
+            <defs>
+              <mask id="ko-out" maskUnits="userSpaceOnUse" x="-60" y="-60" width="220" height="240">
+                <rect x="-60" y="-60" width="220" height="240" fill="#fff"/><g class="carve-out"></g>
+              </mask>
+              <mask id="ko-mid" maskUnits="userSpaceOnUse" x="-60" y="-60" width="220" height="240">
+                <rect x="-60" y="-60" width="220" height="240" fill="#fff"/><g class="carve-mid"></g>
+              </mask>
+            </defs>
             <g class="msgs"></g>
           </svg>
           <slot></slot>
@@ -355,8 +367,11 @@ if (typeof window !== 'undefined' && !customElements.get('mediated-conversation'
 
       const root = this.shadowRoot.querySelector('.msgs');
       const css = getComputedStyle(this);
-      const violet = css.getPropertyValue('--convo-violet').trim() || VIOLET;
-      const coral = css.getPropertyValue('--convo-coral').trim() || CORAL;
+      const mono = this.getAttribute('color');
+      const violet = mono || css.getPropertyValue('--convo-violet').trim() || VIOLET;
+      const coral = mono || css.getPropertyValue('--convo-coral').trim() || CORAL;
+      this.carveOut = this.shadowRoot.querySelector('.carve-out');
+      this.carveMid = this.shadowRoot.querySelector('.carve-mid');
       // Each message carries both of its looks: the top slot (violet bubble,
       // coral icon) and the bottom slot (coral bubble, violet icon).
       root.innerHTML = this.msgs
@@ -434,6 +449,7 @@ if (typeof window !== 'undefined' && !customElements.get('mediated-conversation'
       this.nodes.forEach(({ g, top, bottom }, j) => {
         g.style.display = j === s || j === s + 1 ? '' : 'none';
         g.removeAttribute('transform');
+        g.removeAttribute('mask');
         this.put(top, j === s ? 1 : 0);
         this.put(bottom, j === s + 1 ? 1 : 0);
       });
@@ -443,7 +459,7 @@ if (typeof window !== 'undefined' && !customElements.get('mediated-conversation'
     draw(s, t) {
       const [out, mid, inn] = [this.nodes[s], this.nodes[s + 1], this.nodes[s + 2]];
       this.nodes.forEach(({ g }) => { g.style.display = 'none'; });
-      for (const n of [out, mid, inn]) { n.g.style.display = ''; n.g.removeAttribute('transform'); }
+      for (const n of [out, mid, inn]) { n.g.style.display = ''; n.g.removeAttribute('transform'); n.g.removeAttribute('mask'); }
 
       if (this.reduced) {                         // plain crossfade, no movement
         const k = easeInOutCubic(t);
@@ -462,9 +478,25 @@ if (typeof window !== 'undefined' && !customElements.get('mediated-conversation'
       this.put(mid.top, p.mid.top.opacity, `translate(${p.mid.top.dx.toFixed(3)} ${p.mid.top.dy.toFixed(3)})`);
       // 3. new message pops in from its tail tip at the bottom slot
       const [ox, oy] = BUBBLE_BOTTOM.origin;
+      const innT = `translate(0 ${p.inn.rise.toFixed(3)}) translate(${ox} ${oy}) scale(${p.inn.scale.toFixed(4)}) translate(${-ox} ${-oy})`;
       this.put(inn.top, 0);
-      this.put(inn.bottom, p.inn.opacity,
-        `translate(0 ${p.inn.rise.toFixed(3)}) translate(${ox} ${oy}) scale(${p.inn.scale.toFixed(4)}) translate(${-ox} ${-oy})`);
+      this.put(inn.bottom, p.inn.opacity, innT);
+
+      // Knock-out: a bubble in front (nearly opaque) hides the outline of one behind it.
+      const midLook = p.mid.top.opacity >= 0.5
+        ? ['top', p.mid.top, `translate(${p.mid.top.dx.toFixed(3)} ${p.mid.top.dy.toFixed(3)})`]
+        : ['bottom', p.mid.bottom, `translate(${p.mid.bottom.dx.toFixed(3)} ${p.mid.bottom.dy.toFixed(3)})`];
+      const shape = (which, tf) => {
+        const g = which === 'top' ? BUBBLE_TOP : BUBBLE_BOTTOM;
+        return `<g transform="${tf}" fill="#000" stroke="#000" stroke-width="5" stroke-linejoin="round"><path d="${g.body}"/><path d="${g.tail}"/></g>`;
+      };
+      const front = (o) => o >= 0.9;
+      const midShape = front(midLook[1].opacity) ? shape(midLook[0], midLook[2]) : '';
+      const innShape = front(p.inn.opacity) ? shape('bottom', innT) : '';
+      this.carveOut.innerHTML = midShape + innShape;
+      this.carveMid.innerHTML = innShape;
+      if (this.carveOut.innerHTML) out.g.setAttribute('mask', 'url(#ko-out)');
+      if (this.carveMid.innerHTML) mid.g.setAttribute('mask', 'url(#ko-mid)');
     }
   }
   customElements.define('mediated-conversation', MediatedConversation);
