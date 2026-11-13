@@ -1,0 +1,38 @@
+<!doctype html><meta charset="utf-8"><pre id="out">pending</pre>
+<script type="module">
+import { BUBBLE_TOP, BUBBLE_BOTTOM, THEMES, bubbleMarkup, messagesOf } from './conversation-scroll.js';
+import { stepPose } from './conversation-scroll-up.js';
+const q = new URLSearchParams(location.search);
+const N_T = +q.get('n') || 56, SCALE = +q.get('scale') || 2, COLOR = q.get('color') || '#ffffff';
+const msgs = messagesOf(THEMES), M = msgs.length;
+const D = BUBBLE_BOTTOM.center[1] - BUBBLE_TOP.center[1];
+const GEOM = [BUBBLE_TOP, BUBBLE_BOTTOM];
+const slotY = (side, k) => (side === 0 ? D * k : -D * (1 - k));
+const VB = [-6, -18, 111, 142];
+const bub = (i) => { const w = i % 2 === 0 ? 'top' : 'bottom'; return bubbleMarkup(w, msgs[i % M].icon, { bubbleColor: COLOR, iconColor: COLOR }); };
+const g = (i, op, tf) => `<g opacity="${op.toFixed(3)}" transform="${tf}">${bub(i)}</g>`;
+function svg(s, t) {
+  let body;
+  if (t === 0) body = g(s, 1, `translate(0 ${slotY(s % 2, 0)})`) + g(s + 1, 1, `translate(0 ${slotY((s + 1) % 2, 1)})`);
+  else {
+    const p = stepPose(t), si = (s + 2) % 2;
+    const [ox, oy] = GEOM[si].origin;
+    body = g(s, p.out.opacity, `translate(0 ${slotY(s % 2, 0) + p.out.lift})`)
+      + g(s + 1, 1, `translate(0 ${slotY((s + 1) % 2, p.mid.k)})`)
+      + g(s + 2, p.inn.opacity, `translate(0 ${slotY(si, 1) + p.inn.rise}) translate(${ox} ${oy}) scale(${p.inn.scale}) translate(${-ox} ${-oy})`);
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${VB.join(' ')}" width="${VB[2]*SCALE}" height="${VB[3]*SCALE}">${body}</svg>`;
+}
+const cv = document.createElement('canvas'); cv.width = VB[2]*SCALE; cv.height = VB[3]*SCALE;
+const cx = cv.getContext('2d');
+const out = [];
+for (let s = 0; s < M; s++) for (let k = 0; k < N_T; k++) {
+  const img = new Image();
+  const ld = new Promise((r) => (img.onload = r));
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg(s, k / N_T));
+  await ld;
+  cx.clearRect(0, 0, cv.width, cv.height); cx.drawImage(img, 0, 0);
+  out.push(cv.toDataURL('image/png').slice(22));
+}
+document.getElementById('out').textContent = JSON.stringify({ M, N_T, w: cv.width, h: cv.height, frames: out });
+</script>
